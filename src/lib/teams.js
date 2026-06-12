@@ -1,0 +1,74 @@
+export const TEAMS = [
+  { name: "Mexico", code: "MEX", group: "A", flag: "🇲🇽" },
+  { name: "South Korea", code: "KOR", group: "A", flag: "🇰🇷" },
+  { name: "South Africa", code: "RSA", group: "A", flag: "🇿🇦" },
+  { name: "Czechia", code: "CZE", group: "A", flag: "🇨🇿" },
+  { name: "Canada", code: "CAN", group: "B", flag: "🇨🇦" },
+  { name: "Switzerland", code: "SUI", group: "B", flag: "🇨🇭" },
+  { name: "Qatar", code: "QAT", group: "B", flag: "🇶🇦" },
+  { name: "Bosnia-Herzegovina", code: "BIH", group: "B", flag: "🇧🇦" },
+  { name: "Brazil", code: "BRA", group: "C", flag: "🇧🇷" },
+  { name: "Morocco", code: "MAR", group: "C", flag: "🇲🇦" },
+  { name: "Scotland", code: "SCO", group: "C", flag: "🏴󠁧󠁢󠁳󠁣󠁴󠁿" },
+  { name: "Haiti", code: "HAI", group: "C", flag: "🇭🇹" },
+  { name: "USA", code: "USA", group: "D", flag: "🇺🇸" },
+  { name: "Paraguay", code: "PAR", group: "D", flag: "🇵🇾" },
+  { name: "Australia", code: "AUS", group: "D", flag: "🇦🇺" },
+  { name: "Türkiye", code: "TUR", group: "D", flag: "🇹🇷" },
+  { name: "Germany", code: "GER", group: "E", flag: "🇩🇪" },
+  { name: "Ecuador", code: "ECU", group: "E", flag: "🇪🇨" },
+  { name: "Ivory Coast", code: "CIV", group: "E", flag: "🇨🇮" },
+  { name: "Curaçao", code: "CUW", group: "E", flag: "🇨🇼" },
+  { name: "Netherlands", code: "NED", group: "F", flag: "🇳🇱" },
+  { name: "Japan", code: "JPN", group: "F", flag: "🇯🇵" },
+  { name: "Sweden", code: "SWE", group: "F", flag: "🇸🇪" },
+  { name: "Tunisia", code: "TUN", group: "F", flag: "🇹🇳" },
+  { name: "Belgium", code: "BEL", group: "G", flag: "🇧🇪" },
+  { name: "Egypt", code: "EGY", group: "G", flag: "🇪🇬" },
+  { name: "Iran", code: "IRN", group: "G", flag: "🇮🇷" },
+  { name: "New Zealand", code: "NZL", group: "G", flag: "🇳🇿" },
+  { name: "Spain", code: "ESP", group: "H", flag: "🇪🇸" },
+  { name: "Uruguay", code: "URU", group: "H", flag: "🇺🇾" },
+  { name: "Saudi Arabia", code: "KSA", group: "H", flag: "🇸🇦" },
+  { name: "Cape Verde", code: "CPV", group: "H", flag: "🇨🇻" },
+  { name: "France", code: "FRA", group: "I", flag: "🇫🇷" },
+  { name: "Senegal", code: "SEN", group: "I", flag: "🇸🇳" },
+  { name: "Norway", code: "NOR", group: "I", flag: "🇳🇴" },
+  { name: "Iraq", code: "IRQ", group: "I", flag: "🇮🇶" },
+  { name: "Argentina", code: "ARG", group: "J", flag: "🇦🇷" },
+  { name: "Austria", code: "AUT", group: "J", flag: "🇦🇹" },
+  { name: "Algeria", code: "ALG", group: "J", flag: "🇩🇿" },
+  { name: "Jordan", code: "JOR", group: "J", flag: "🇯🇴" },
+  { name: "Portugal", code: "POR", group: "K", flag: "🇵🇹" },
+  { name: "Colombia", code: "COL", group: "K", flag: "🇨🇴" },
+  { name: "Uzbekistan", code: "UZB", group: "K", flag: "🇺🇿" },
+  { name: "DR Congo", code: "COD", group: "K", flag: "🇨🇩" },
+  { name: "England", code: "ENG", group: "L", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
+  { name: "Croatia", code: "CRO", group: "L", flag: "🇭🇷" },
+  { name: "Panama", code: "PAN", group: "L", flag: "🇵🇦" },
+  { name: "Ghana", code: "GHA", group: "L", flag: "🇬🇭" }
+];
+
+export const GROUPS = ["A","B","C","D","E","F","G","H","I","J","K","L"];
+
+export const STAGES = [
+  "Group Stage",
+  "Round of 32",
+  "Round of 16",
+  "Quarter-finals",
+  "Semi-finals",
+  "Third Place",
+  "Final"
+];
+
+export function getTeamByCode(code) {
+  return TEAMS.find(t => t.code === code);
+}
+
+export function getTeamByName(name) {
+  return TEAMS.find(t => t.name.toLowerCase() === name.toLowerCase());
+}
+
+export function getTeamsByGroup(group) {
+  return TEAMS.filter(t => t.group === group);
+}
