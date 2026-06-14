@@ -30,10 +30,10 @@ export default function Admin() {
     <>
       <div className="page-title">⚙️ Admin Panel</div>
       <div className="tabs">
-        {['participants','sync','matches','positions'].map(t => (
+        {['participants','sync','matches','import','positions'].map(t => (
           <button key={t} className={`tab ${tab === t ? 'active' : ''}`}
             onClick={() => setTab(t)}>
-            {t === 'participants' ? '👥 Participants' : t === 'sync' ? '🔄 Sync API' : t === 'matches' ? '⚽ Matches' : '🏅 Positions'}
+            {t === 'participants' ? '👥 Participants' : t === 'sync' ? '🔄 Sync API' : t === 'matches' ? '⚽ Matches' : t === 'import' ? '📥 Import' : '🏅 Positions'}
           </button>
         ))}
       </div>
