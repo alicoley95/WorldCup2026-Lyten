@@ -21,13 +21,18 @@ export default async function handler(req, context) {
   }
 
   const supabase = createClient(supabaseUrl, supabaseKey);
-  const headers = { 'X-Auth-Token': apiKey };
+
+  const apiHeaders = {
+    'X-Auth-Token': apiKey,
+    'X-Unfold-Goals': 'true',
+    'X-Unfold-Bookings': 'true',
+  };
 
   try {
-    // ── 1. Fetch all WC matches ──────────────────────────────────────────────
+    // ── 1. Fetch all WC matches with goals and bookings unfolded ─────────────
     const matchesUrl = `${FOOTBALL_DATA_BASE}/competitions/${COMPETITION}/matches`;
     console.log(`Fetching: ${matchesUrl}`);
-    const matchesRes = await fetch(matchesUrl, { headers });
+    const matchesRes = await fetch(matchesUrl, { headers: apiHeaders });
     console.log(`Matches response status: ${matchesRes.status}`);
 
     if (!matchesRes.ok) {
@@ -43,9 +48,27 @@ export default async function handler(req, context) {
     const matches = matchesData.matches || [];
     console.log(`Total matches received: ${matches.length}`);
 
-    // ── 2. Upsert matches into Supabase ──────────────────────────────────────
+    // ── 2. Fetch already-synced fixture IDs from Supabase ───────────────────
+    // We track which matches have had their events fully synced by checking
+    // for existing match_events rows. If a match has events recorded we skip
+    // re-processing it, unless the score has changed (e.g. correction).
+    const { data: existingMatches, error: existingError } = await supabase
+      .from('matches')
+      .select('id, api_fixture_id, home_score, away_score')
+      .not('home_score', 'is', null);
+
+    if (existingError) {
+      console.error('Error fetching existing matches:', existingError.message);
+    }
+
+    const existingByFixtureId = {};
+    for (const m of (existingMatches || [])) {
+      existingByFixtureId[m.api_fixture_id] = m;
+    }
+
     let matchesUpserted = 0;
-    let goalsUpserted = 0;
+    let eventsInserted = 0;
+    let matchesSkipped = 0;
 
     for (const match of matches) {
       if (match.status !== 'FINISHED') continue;
@@ -55,27 +78,36 @@ export default async function handler(req, context) {
       const homeName = match.homeTeam?.shortName || match.homeTeam?.name;
       const awayName = match.awayTeam?.shortName || match.awayTeam?.name;
 
-      // Determine group/stage label
-      const stage = match.stage || '';
-      const group = match.group || null;
-      const stageLabel = group
-        ? group.replace('GROUP_', 'Group ')
-        : stage.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+      const rawGroup = match.group || null;
+      const groupName = rawGroup ? rawGroup.replace('GROUP_', 'Group ') : null;
+      const rawStage = match.stage || '';
+      const stageLabel = groupName
+        ? 'Group Stage'
+        : rawStage.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
 
+      const existing = existingByFixtureId[match.id];
+      const scoreChanged = existing &&
+        (existing.home_score !== homeScore || existing.away_score !== awayScore);
+      const isNew = !existing;
+
+      // ── 3. Upsert the match row ────────────────────────────────────────────
       const matchRecord = {
-        external_id: String(match.id),
+        api_fixture_id: match.id,
         home_team: homeName,
         away_team: awayName,
         home_score: homeScore,
         away_score: awayScore,
-        match_date: match.utcDate,
         stage: stageLabel,
+        group_name: groupName,
+        match_date: match.utcDate,
+        venue: match.venue || null,
         status: match.status,
+        updated_at: new Date().toISOString(),
       };
 
       const { data: upsertedMatch, error: matchError } = await supabase
         .from('matches')
-        .upsert(matchRecord, { onConflict: 'external_id', returning: 'representation' })
+        .upsert(matchRecord, { onConflict: 'api_fixture_id' })
         .select()
         .single();
 
@@ -87,74 +119,95 @@ export default async function handler(req, context) {
       matchesUpserted++;
       const matchId = upsertedMatch.id;
 
-      // ── 3. Upsert goals ───────────────────────────────────────────────────
+      // Skip event processing if match already synced and score unchanged
+      if (existing && !scoreChanged) {
+        matchesSkipped++;
+        continue;
+      }
+
+      if (scoreChanged) {
+        console.log(`Score changed for match ${match.id}, re-syncing events.`);
+      }
+
+      // ── 4. Clear and re-insert events for this match ──────────────────────
+      // Delete existing events first to avoid duplicates on re-sync
+      await supabase
+        .from('match_events')
+        .delete()
+        .eq('match_id', matchId);
+
+      const events = [];
+
+      // Goals
       const goals = match.goals || [];
       for (const goal of goals) {
         if (!goal.scorer?.name) continue;
+        const eventType = goal.type === 'OWN'
+          ? 'own_goal'
+          : goal.type === 'PENALTY'
+          ? 'penalty'
+          : 'goal';
 
-        const goalRecord = {
+        events.push({
           match_id: matchId,
-          player_name: goal.scorer.name,
           team: goal.team?.shortName || goal.team?.name || null,
+          player_name: goal.scorer.name,
+          event_type: eventType,
           minute: goal.minute ?? null,
-          is_own_goal: goal.type === 'OWN_GOAL',
-          is_penalty: goal.type === 'PENALTY',
-        };
+          detail: null,
+        });
+      }
 
-        const { error: goalError } = await supabase
-          .from('goals')
-          .upsert(goalRecord, { onConflict: 'match_id,player_name,minute' });
+      // Bookings (yellow cards, yellow-reds, reds)
+      const bookings = match.bookings || [];
+      for (const booking of bookings) {
+        if (!booking.player?.name) continue;
+        const cardType = booking.card === 'YELLOW_RED'
+          ? 'yellow_red_card'
+          : booking.card === 'RED'
+          ? 'red_card'
+          : 'yellow_card';
 
-        if (goalError) {
-          console.error(`Error upserting goal:`, goalError.message);
+        events.push({
+          match_id: matchId,
+          team: booking.team?.shortName || booking.team?.name || null,
+          player_name: booking.player.name,
+          event_type: cardType,
+          minute: booking.minute ?? null,
+          detail: null,
+        });
+      }
+
+      if (events.length > 0) {
+        const { error: eventsError } = await supabase
+          .from('match_events')
+          .insert(events);
+
+        if (eventsError) {
+          console.error(`Error inserting events for match ${match.id}:`, eventsError.message);
         } else {
-          goalsUpserted++;
+          eventsInserted += events.length;
+          console.log(`Match ${match.id}: ${goals.length} goals, ${bookings.length} bookings inserted.`);
         }
       }
     }
 
-    // ── 4. Fetch top scorers ─────────────────────────────────────────────────
+    // ── 5. Fetch top scorers for reference ───────────────────────────────────
+    // Note: goal tallies per player can be derived from match_events in Supabase.
+    // The scorers endpoint is fetched here as a cross-check log only.
     const scorersUrl = `${FOOTBALL_DATA_BASE}/competitions/${COMPETITION}/scorers?limit=20`;
-    console.log(`Fetching: ${scorersUrl}`);
-    const scorersRes = await fetch(scorersUrl, { headers });
-    console.log(`Scorers response status: ${scorersRes.status}`);
-
-    let scorersUpserted = 0;
+    const scorersRes = await fetch(scorersUrl, { headers: apiHeaders });
     if (scorersRes.ok) {
       const scorersData = await scorersRes.json();
-      const scorers = scorersData.scorers || [];
-      console.log(`Scorers received: ${scorers.length}`);
-
-      for (const entry of scorers) {
-        const scorerRecord = {
-          player_name: entry.player?.name,
-          team: entry.team?.shortName || entry.team?.name || null,
-          goals: entry.goals ?? 0,
-          assists: entry.assists ?? 0,
-          penalties: entry.penalties ?? 0,
-        };
-
-        if (!scorerRecord.player_name) continue;
-
-        const { error: scorerError } = await supabase
-          .from('top_scorers')
-          .upsert(scorerRecord, { onConflict: 'player_name' });
-
-        if (scorerError) {
-          console.error(`Error upserting scorer:`, scorerError.message);
-        } else {
-          scorersUpserted++;
-        }
-      }
-    } else {
-      console.warn('Scorers fetch failed with status:', scorersRes.status);
+      const scorers = (scorersData.scorers || []).slice(0, 5);
+      console.log('Top scorers (cross-check):', scorers.map(s => `${s.player?.name} ${s.goals}g`).join(', '));
     }
 
     const summary = {
       success: true,
       matchesUpserted,
-      goalsUpserted,
-      scorersUpserted,
+      matchesSkipped,
+      eventsInserted,
     };
 
     console.log('Sync complete:', JSON.stringify(summary));
