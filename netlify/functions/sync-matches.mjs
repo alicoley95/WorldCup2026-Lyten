@@ -11,8 +11,11 @@ async function apiFetch(endpoint) {
   const res = await fetch(`https://${API_HOST}${endpoint}`, {
     headers: { 'x-apisports-key': API_KEY }
   })
-  if (!res.ok) throw new Error(`API error: ${res.status}`)
-  return res.json()
+  const text = await res.text()
+  console.log(`API ${endpoint} status:`, res.status)
+  console.log(`API ${endpoint} response:`, text.substring(0, 500))
+  if (!res.ok) throw new Error(`API error: ${res.status} — ${text.substring(0, 200)}`)
+  return JSON.parse(text)
 }
 
 function mapStage(round) {
@@ -43,31 +46,46 @@ function mapEventType(type, detail) {
 
 export async function handler() {
   try {
-    if (!API_KEY) throw new Error('API_FOOTBALL_KEY not set')
+    console.log('Sync started. API_KEY present:', !!API_KEY)
+    console.log('SUPABASE_URL present:', !!process.env.SUPABASE_URL)
+    console.log('SUPABASE_SERVICE_KEY present:', !!process.env.SUPABASE_SERVICE_KEY)
 
-    // Fetch all World Cup fixtures
+    if (!API_KEY) throw new Error('API_FOOTBALL_KEY not set in environment')
+
     const fixturesData = await apiFetch(`/fixtures?league=${LEAGUE_ID}&season=${SEASON}`)
     const fixtures = fixturesData.response || []
 
+    console.log('Fixtures received:', fixtures.length)
+    console.log('API errors:', JSON.stringify(fixturesData.errors))
+
     if (fixtures.length === 0) {
-      return { statusCode: 200, body: JSON.stringify({ matchesUpdated: 0, eventsAdded: 0, message: 'No fixtures found' }) }
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          matchesUpdated: 0,
+          eventsAdded: 0,
+          message: 'No fixtures found',
+          apiErrors: fixturesData.errors,
+          apiResults: fixturesData.results
+        })
+      }
     }
 
     let matchesUpdated = 0
     let eventsAdded = 0
 
-    // Upsert all fixtures
     for (const fix of fixtures) {
       const f = fix.fixture
       const teams = fix.teams
       const goals = fix.goals
       const league = fix.league
 
-      const statusMap = { 'FT': 'finished', 'AET': 'finished', 'PEN': 'finished',
+      const statusMap = {
+        'FT': 'finished', 'AET': 'finished', 'PEN': 'finished',
         'NS': 'scheduled', 'TBD': 'scheduled', 'PST': 'scheduled',
-        '1H': 'live', '2H': 'live', 'HT': 'live', 'ET': 'live', 'BT': 'live', 'P': 'live' }
+        '1H': 'live', '2H': 'live', 'HT': 'live', 'ET': 'live', 'BT': 'live', 'P': 'live'
+      }
       const status = statusMap[f.status?.short] || 'scheduled'
-
       const { stage, group_name } = mapStage(league.round)
 
       const row = {
@@ -86,17 +104,17 @@ export async function handler() {
       }
 
       const { error } = await supabase.from('matches').upsert(row, { onConflict: 'api_fixture_id' })
-      if (!error) matchesUpdated++
+      if (error) console.error('Supabase upsert error:', error.message)
+      else matchesUpdated++
     }
 
-    // Fetch events for finished matches that may need updating
+    // Fetch events for finished matches
     const { data: finishedMatches } = await supabase
       .from('matches')
       .select('id, api_fixture_id')
       .eq('status', 'finished')
 
     if (finishedMatches && finishedMatches.length > 0) {
-      // Check which matches already have events
       const { data: existingEvents } = await supabase
         .from('match_events')
         .select('match_id')
@@ -104,33 +122,29 @@ export async function handler() {
       const matchesWithEvents = new Set((existingEvents || []).map(e => e.match_id))
       const needEvents = finishedMatches.filter(m => !matchesWithEvents.has(m.id))
 
-      // Fetch events in batches of 10
-      for (let i = 0; i < needEvents.length; i += 10) {
-        const batch = needEvents.slice(i, i + 10)
-        for (const match of batch) {
-          try {
-            const evData = await apiFetch(`/fixtures/events?fixture=${match.api_fixture_id}`)
-            const rawEvents = evData.response || []
+      for (const match of needEvents) {
+        try {
+          const evData = await apiFetch(`/fixtures/events?fixture=${match.api_fixture_id}`)
+          const rawEvents = evData.response || []
 
-            for (const ev of rawEvents) {
-              const eventType = mapEventType(ev.type, ev.detail)
-              if (!eventType) continue
+          for (const ev of rawEvents) {
+            const eventType = mapEventType(ev.type, ev.detail)
+            if (!eventType) continue
 
-              const eventRow = {
-                match_id: match.id,
-                team: ev.team?.name || 'Unknown',
-                player_name: ev.player?.name || 'Unknown',
-                event_type: eventType,
-                minute: ev.time?.elapsed || null,
-                detail: ev.detail || null
-              }
-
-              const { error } = await supabase.from('match_events').insert(eventRow)
-              if (!error) eventsAdded++
+            const eventRow = {
+              match_id: match.id,
+              team: ev.team?.name || 'Unknown',
+              player_name: ev.player?.name || 'Unknown',
+              event_type: eventType,
+              minute: ev.time?.elapsed || null,
+              detail: ev.detail || null
             }
-          } catch (err) {
-            console.error(`Failed to fetch events for fixture ${match.api_fixture_id}:`, err.message)
+
+            const { error } = await supabase.from('match_events').insert(eventRow)
+            if (!error) eventsAdded++
           }
+        } catch (err) {
+          console.error(`Failed events for fixture ${match.api_fixture_id}:`, err.message)
         }
       }
     }
@@ -141,6 +155,7 @@ export async function handler() {
       body: JSON.stringify({ matchesUpdated, eventsAdded, totalFixtures: fixtures.length })
     }
   } catch (err) {
+    console.error('Sync error:', err.message)
     return {
       statusCode: 500,
       headers: { 'Content-Type': 'application/json' },
