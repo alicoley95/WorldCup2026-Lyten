@@ -40,7 +40,6 @@ export default function Admin() {
       {tab === 'participants' && <ParticipantsTab />}
       {tab === 'sync' && <SyncTab />}
       {tab === 'matches' && <MatchesTab />}
-      {tab === 'import' && <ImportTab />}
       {tab === 'positions' && <PositionsTab />}
     </>
   )
@@ -413,127 +412,6 @@ function PositionsTab() {
             ))}
           </tbody>
         </table>
-      </div>
-    </>
-  )
-}
-
-function ImportTab() {
-  const [json, setJson] = useState('')
-  const [msg, setMsg] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [preview, setPreview] = useState(null)
-
-  function parseJson() {
-    try {
-      const parsed = JSON.parse(json)
-      const arr = Array.isArray(parsed) ? parsed : [parsed]
-      setPreview(arr)
-      setMsg({ type: 'success', text: `Parsed ${arr.length} match(es). Review below then click Import.` })
-    } catch (e) {
-      setMsg({ type: 'error', text: `Invalid JSON: ${e.message}` })
-      setPreview(null)
-    }
-  }
-
-  async function doImport() {
-    if (!preview) return
-    setLoading(true)
-    setMsg(null)
-    try {
-      const res = await fetch('/.netlify/functions/import-events', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(preview)
-      })
-      const data = await res.json()
-      if (!res.ok || data.error) throw new Error(data.error || 'Import failed')
-      const ok = data.results.filter(r => r.status === 'ok').length
-      const failed = data.results.filter(r => r.status !== 'ok').length
-      setMsg({ type: 'success', text: `Import complete: ${ok} match(es) imported${failed > 0 ? `, ${failed} failed (check console)` : ''}.` })
-      setPreview(null)
-      setJson('')
-    } catch (err) {
-      setMsg({ type: 'error', text: `Import failed: ${err.message}` })
-    }
-    setLoading(false)
-  }
-
-  return (
-    <>
-      {msg && <div className={`alert alert-${msg.type}`}>{msg.text}</div>}
-      <div className="card">
-        <h3>Import Match Events</h3>
-        <p style={{ marginBottom: 12, color: 'var(--text-light)', fontSize: 14 }}>
-          Paste a JSON array of match results. Same format used in the Claude tracker artifact.
-          Each match updates scores and replaces all goal and card events.
-        </p>
-        <div className="form-group">
-          <label>JSON</label>
-          <textarea
-            value={json}
-            onChange={e => setJson(e.target.value)}
-            placeholder={'[\n  {\n    "date": "2026-06-11",\n    "group": "A",\n    "homeCode": "MEX",\n    "awayCode": "RSA",\n    "homeScore": 2,\n    "awayScore": 0,\n    "goals": [\n      {"player": "Julián Quiñones", "code": "MEX", "minute": 9, "ownGoal": false}\n    ],\n    "cards": [\n      {"player": "Teboho Mokoena", "code": "RSA", "type": "yellow", "minute": 17}\n    ]\n  }\n]'}
-            style={{ width: '100%', minHeight: 220, fontFamily: 'monospace', fontSize: 12, padding: 8, boxSizing: 'border-box' }}
-          />
-        </div>
-        <div className="btn-row" style={{ marginBottom: 12 }}>
-          <button className="btn-primary" onClick={parseJson} disabled={!json.trim()}>
-            Parse & Preview
-          </button>
-          {preview && (
-            <button className="btn-accent" onClick={doImport} disabled={loading}>
-              {loading ? '⏳ Importing...' : `✅ Import ${preview.length} match(es)`}
-            </button>
-          )}
-        </div>
-        {preview && (
-          <table>
-            <thead>
-              <tr><th>Date</th><th>Home</th><th>Score</th><th>Away</th><th>Goals</th><th>Cards</th></tr>
-            </thead>
-            <tbody>
-              {preview.map((m, i) => (
-                <tr key={i}>
-                  <td style={{ fontSize: 12 }}>{m.date}</td>
-                  <td>{m.homeCode}</td>
-                  <td style={{ textAlign: 'center', fontWeight: 700 }}>{m.homeScore} - {m.awayScore}</td>
-                  <td>{m.awayCode}</td>
-                  <td style={{ fontSize: 12 }}>{(m.goals || []).length}</td>
-                  <td style={{ fontSize: 12 }}>{(m.cards || []).length}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      <div className="card">
-        <h3>JSON Format Reference</h3>
-        <pre style={{ fontSize: 11, background: 'var(--bg)', padding: 12, borderRadius: 6, overflow: 'auto' }}>{`[{
-  "date": "2026-06-11",       // YYYY-MM-DD
-  "group": "A",               // group letter
-  "homeCode": "MEX",          // 3-letter team code
-  "awayCode": "RSA",
-  "homeScore": 2,
-  "awayScore": 0,
-  "goals": [
-    {
-      "player": "Julián Quiñones",
-      "code": "MEX",          // team the player plays for
-      "minute": 9,            // null if unknown
-      "ownGoal": false        // true for own goals (code = team who scored it)
-    }
-  ],
-  "cards": [
-    {
-      "player": "Teboho Mokoena",
-      "code": "RSA",
-      "type": "yellow",       // yellow | red | yellow_red
-      "minute": 17            // null if unknown
-    }
-  ]
-}]`}</pre>
       </div>
     </>
   )
