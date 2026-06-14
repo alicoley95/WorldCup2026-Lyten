@@ -1,165 +1,174 @@
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from '@supabase/supabase-js';
 
-const API_KEY = process.env.API_FOOTBALL_KEY
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY)
+const FOOTBALL_DATA_BASE = 'https://api.football-data.org/v4';
+const COMPETITION = 'WC';
 
-const API_HOST = 'v3.football.api-sports.io'
-const LEAGUE_ID = 1
-const SEASON = 2026
+export default async function handler(req, context) {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+  const apiKey = process.env.FOOTBALL_DATA_KEY;
 
-async function apiFetch(endpoint) {
-  const res = await fetch(`https://${API_HOST}${endpoint}`, {
-    headers: { 'x-apisports-key': API_KEY }
-  })
-  const text = await res.text()
-  console.log(`API ${endpoint} status:`, res.status)
-  console.log(`API ${endpoint} response:`, text.substring(0, 500))
-  if (!res.ok) throw new Error(`API error: ${res.status} — ${text.substring(0, 200)}`)
-  return JSON.parse(text)
-}
+  console.log('Sync started.');
+  console.log('FOOTBALL_DATA_KEY present:', !!apiKey);
+  console.log('SUPABASE_URL present:', !!supabaseUrl);
+  console.log('SUPABASE_SERVICE_KEY present:', !!supabaseKey);
 
-function mapStage(round) {
-  if (!round) return { stage: 'Group Stage', group_name: null }
-  const r = round.toLowerCase()
-  if (r.includes('group')) {
-    const letter = round.replace(/[^A-L]/gi, '').toUpperCase()
-    return { stage: 'Group Stage', group_name: letter || null }
+  if (!supabaseUrl || !supabaseKey || !apiKey) {
+    return new Response(JSON.stringify({ error: 'Missing environment variables' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
-  if (r.includes('32')) return { stage: 'Round of 32', group_name: null }
-  if (r.includes('16')) return { stage: 'Round of 16', group_name: null }
-  if (r.includes('quarter')) return { stage: 'Quarter-final', group_name: null }
-  if (r.includes('semi')) return { stage: 'Semi-final', group_name: null }
-  if (r.includes('3rd') || r.includes('third')) return { stage: 'Third Place', group_name: null }
-  if (r.includes('final') && !r.includes('semi') && !r.includes('quarter'))
-    return { stage: 'Final', group_name: null }
-  return { stage: round, group_name: null }
-}
 
-function mapEventType(type, detail) {
-  if (type === 'Goal' && detail === 'Penalty') return 'penalty_goal'
-  if (type === 'Goal' && detail === 'Own Goal') return 'own_goal'
-  if (type === 'Goal') return 'goal'
-  if (type === 'Card' && detail === 'Yellow Card') return 'yellow'
-  if (type === 'Card' && detail === 'Red Card') return 'red'
-  return null
-}
+  const supabase = createClient(supabaseUrl, supabaseKey);
+  const headers = { 'X-Auth-Token': apiKey };
 
-export async function handler() {
   try {
-    console.log('Sync started. API_KEY present:', !!API_KEY)
-    console.log('SUPABASE_URL present:', !!process.env.SUPABASE_URL)
-    console.log('SUPABASE_SERVICE_KEY present:', !!process.env.SUPABASE_SERVICE_KEY)
+    // ── 1. Fetch all WC matches ──────────────────────────────────────────────
+    const matchesUrl = `${FOOTBALL_DATA_BASE}/competitions/${COMPETITION}/matches`;
+    console.log(`Fetching: ${matchesUrl}`);
+    const matchesRes = await fetch(matchesUrl, { headers });
+    console.log(`Matches response status: ${matchesRes.status}`);
 
-    if (!API_KEY) throw new Error('API_FOOTBALL_KEY not set in environment')
-
-    const fixturesData = await apiFetch(`/fixtures?league=${LEAGUE_ID}&season=${SEASON}`)
-    const fixtures = fixturesData.response || []
-
-    console.log('Fixtures received:', fixtures.length)
-    console.log('API errors:', JSON.stringify(fixturesData.errors))
-
-    if (fixtures.length === 0) {
-      return {
-        statusCode: 200,
-        body: JSON.stringify({
-          matchesUpdated: 0,
-          eventsAdded: 0,
-          message: 'No fixtures found',
-          apiErrors: fixturesData.errors,
-          apiResults: fixturesData.results
-        })
-      }
+    if (!matchesRes.ok) {
+      const text = await matchesRes.text();
+      console.error('Matches fetch failed:', text);
+      return new Response(JSON.stringify({ error: 'Matches fetch failed', detail: text }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
 
-    let matchesUpdated = 0
-    let eventsAdded = 0
+    const matchesData = await matchesRes.json();
+    const matches = matchesData.matches || [];
+    console.log(`Total matches received: ${matches.length}`);
 
-    for (const fix of fixtures) {
-      const f = fix.fixture
-      const teams = fix.teams
-      const goals = fix.goals
-      const league = fix.league
+    // ── 2. Upsert matches into Supabase ──────────────────────────────────────
+    let matchesUpserted = 0;
+    let goalsUpserted = 0;
 
-      const statusMap = {
-        'FT': 'finished', 'AET': 'finished', 'PEN': 'finished',
-        'NS': 'scheduled', 'TBD': 'scheduled', 'PST': 'scheduled',
-        '1H': 'live', '2H': 'live', 'HT': 'live', 'ET': 'live', 'BT': 'live', 'P': 'live'
+    for (const match of matches) {
+      if (match.status !== 'FINISHED') continue;
+
+      const homeScore = match.score?.fullTime?.home ?? null;
+      const awayScore = match.score?.fullTime?.away ?? null;
+      const homeName = match.homeTeam?.shortName || match.homeTeam?.name;
+      const awayName = match.awayTeam?.shortName || match.awayTeam?.name;
+
+      // Determine group/stage label
+      const stage = match.stage || '';
+      const group = match.group || null;
+      const stageLabel = group
+        ? group.replace('GROUP_', 'Group ')
+        : stage.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+
+      const matchRecord = {
+        external_id: String(match.id),
+        home_team: homeName,
+        away_team: awayName,
+        home_score: homeScore,
+        away_score: awayScore,
+        match_date: match.utcDate,
+        stage: stageLabel,
+        status: match.status,
+      };
+
+      const { data: upsertedMatch, error: matchError } = await supabase
+        .from('matches')
+        .upsert(matchRecord, { onConflict: 'external_id', returning: 'representation' })
+        .select()
+        .single();
+
+      if (matchError) {
+        console.error(`Error upserting match ${match.id}:`, matchError.message);
+        continue;
       }
-      const status = statusMap[f.status?.short] || 'scheduled'
-      const { stage, group_name } = mapStage(league.round)
 
-      const row = {
-        api_fixture_id: f.id,
-        home_team: teams.home.name,
-        away_team: teams.away.name,
-        home_score: goals.home,
-        away_score: goals.away,
-        stage,
-        group_name,
-        match_date: f.date,
-        venue: f.venue?.name || null,
-        city: f.venue?.city || null,
-        status,
-        updated_at: new Date().toISOString()
-      }
+      matchesUpserted++;
+      const matchId = upsertedMatch.id;
 
-      const { error } = await supabase.from('matches').upsert(row, { onConflict: 'api_fixture_id' })
-      if (error) console.error('Supabase upsert error:', error.message)
-      else matchesUpdated++
-    }
+      // ── 3. Upsert goals ───────────────────────────────────────────────────
+      const goals = match.goals || [];
+      for (const goal of goals) {
+        if (!goal.scorer?.name) continue;
 
-    // Fetch events for finished matches
-    const { data: finishedMatches } = await supabase
-      .from('matches')
-      .select('id, api_fixture_id')
-      .eq('status', 'finished')
+        const goalRecord = {
+          match_id: matchId,
+          player_name: goal.scorer.name,
+          team: goal.team?.shortName || goal.team?.name || null,
+          minute: goal.minute ?? null,
+          is_own_goal: goal.type === 'OWN_GOAL',
+          is_penalty: goal.type === 'PENALTY',
+        };
 
-    if (finishedMatches && finishedMatches.length > 0) {
-      const { data: existingEvents } = await supabase
-        .from('match_events')
-        .select('match_id')
+        const { error: goalError } = await supabase
+          .from('goals')
+          .upsert(goalRecord, { onConflict: 'match_id,player_name,minute' });
 
-      const matchesWithEvents = new Set((existingEvents || []).map(e => e.match_id))
-      const needEvents = finishedMatches.filter(m => !matchesWithEvents.has(m.id))
-
-      for (const match of needEvents) {
-        try {
-          const evData = await apiFetch(`/fixtures/events?fixture=${match.api_fixture_id}`)
-          const rawEvents = evData.response || []
-
-          for (const ev of rawEvents) {
-            const eventType = mapEventType(ev.type, ev.detail)
-            if (!eventType) continue
-
-            const eventRow = {
-              match_id: match.id,
-              team: ev.team?.name || 'Unknown',
-              player_name: ev.player?.name || 'Unknown',
-              event_type: eventType,
-              minute: ev.time?.elapsed || null,
-              detail: ev.detail || null
-            }
-
-            const { error } = await supabase.from('match_events').insert(eventRow)
-            if (!error) eventsAdded++
-          }
-        } catch (err) {
-          console.error(`Failed events for fixture ${match.api_fixture_id}:`, err.message)
+        if (goalError) {
+          console.error(`Error upserting goal:`, goalError.message);
+        } else {
+          goalsUpserted++;
         }
       }
     }
 
-    return {
-      statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ matchesUpdated, eventsAdded, totalFixtures: fixtures.length })
+    // ── 4. Fetch top scorers ─────────────────────────────────────────────────
+    const scorersUrl = `${FOOTBALL_DATA_BASE}/competitions/${COMPETITION}/scorers?limit=20`;
+    console.log(`Fetching: ${scorersUrl}`);
+    const scorersRes = await fetch(scorersUrl, { headers });
+    console.log(`Scorers response status: ${scorersRes.status}`);
+
+    let scorersUpserted = 0;
+    if (scorersRes.ok) {
+      const scorersData = await scorersRes.json();
+      const scorers = scorersData.scorers || [];
+      console.log(`Scorers received: ${scorers.length}`);
+
+      for (const entry of scorers) {
+        const scorerRecord = {
+          player_name: entry.player?.name,
+          team: entry.team?.shortName || entry.team?.name || null,
+          goals: entry.goals ?? 0,
+          assists: entry.assists ?? 0,
+          penalties: entry.penalties ?? 0,
+        };
+
+        if (!scorerRecord.player_name) continue;
+
+        const { error: scorerError } = await supabase
+          .from('top_scorers')
+          .upsert(scorerRecord, { onConflict: 'player_name' });
+
+        if (scorerError) {
+          console.error(`Error upserting scorer:`, scorerError.message);
+        } else {
+          scorersUpserted++;
+        }
+      }
+    } else {
+      console.warn('Scorers fetch failed with status:', scorersRes.status);
     }
+
+    const summary = {
+      success: true,
+      matchesUpserted,
+      goalsUpserted,
+      scorersUpserted,
+    };
+
+    console.log('Sync complete:', JSON.stringify(summary));
+
+    return new Response(JSON.stringify(summary), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
   } catch (err) {
-    console.error('Sync error:', err.message)
-    return {
-      statusCode: 500,
+    console.error('Unexpected error during sync:', err.message);
+    return new Response(JSON.stringify({ error: err.message }), {
+      status: 500,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ error: err.message })
-    }
+    });
   }
 }
