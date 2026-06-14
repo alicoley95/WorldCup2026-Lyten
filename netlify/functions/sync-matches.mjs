@@ -110,7 +110,7 @@ export default async function handler(req, context) {
       const homeName = match.homeTeam?.shortName || match.homeTeam?.name;
       const awayName = match.awayTeam?.shortName || match.awayTeam?.name;
       const rawGroup = match.group || null;
-      const groupName = rawGroup ? rawGroup.replace('GROUP_', 'Group ') : null;
+      const groupName = rawGroup ? rawGroup.replace('GROUP_', '') : null;
       const rawStage = match.stage || '';
       const stageLabel = groupName
         ? 'Group Stage'
