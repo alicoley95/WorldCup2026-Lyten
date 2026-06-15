@@ -90,12 +90,19 @@ function MatchRow({ match, events }) {
   const away = getTeam(match.away_team)
   const homeGoals = events.filter(e => e.team === match.home_team && ['goal','penalty_goal'].includes(e.event_type))
   const awayGoals = events.filter(e => e.team === match.away_team && ['goal','penalty_goal'].includes(e.event_type))
+  const homeOwnGoals = events.filter(e => e.team === match.away_team && e.event_type === 'own_goal')
+  const awayOwnGoals = events.filter(e => e.team === match.home_team && e.event_type === 'own_goal')
   const homeYellows = events.filter(e => e.team === match.home_team && e.event_type === 'yellow')
   const awayYellows = events.filter(e => e.team === match.away_team && e.event_type === 'yellow')
 
   const dateStr = match.match_date
     ? new Date(match.match_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
     : 'TBC'
+
+  // FIFA highlights search link — only shown for finished matches
+  const highlightsUrl = match.status === 'finished'
+    ? `https://www.google.com/search?q=FIFA+World+Cup+2026+${encodeURIComponent(match.home_team)}+vs+${encodeURIComponent(match.away_team)}+highlights`
+    : null
 
   return (
     <div>
@@ -121,6 +128,11 @@ function MatchRow({ match, events }) {
           <div className="match-meta">
             <span className={`badge badge-${match.status}`}>{match.status}</span>
           </div>
+          {highlightsUrl && (
+            <a href={highlightsUrl} target="_blank" rel="noopener noreferrer" className="match-link">
+              🎬 Highlights & report
+            </a>
+          )}
         </div>
         <div className="match-team away">
           <span>{match.away_team}</span>
@@ -128,13 +140,21 @@ function MatchRow({ match, events }) {
         </div>
       </div>
       {events.length > 0 && (
-        <div className="event-list" style={{ padding: '0 12px 8px', display: 'flex', justifyContent: 'space-between' }}>
+        <div className="event-list" style={{ padding: '0 12px 10px', display: 'flex', justifyContent: 'space-between' }}>
           <div>
-            {homeGoals.map((e, i) => <span key={i} className="event-goal">⚽ {e.player_name} {e.minute && `${e.minute}'`} </span>)}
+            {[...homeGoals, ...homeOwnGoals].map((e, i) => (
+              <span key={i} className="event-goal">
+                ⚽ {e.player_name}{e.event_type === 'own_goal' ? ' (og)' : ''}{e.minute ? ` ${e.minute}'` : ''}{' '}
+              </span>
+            ))}
             {homeYellows.map((e, i) => <span key={i} className="event-yellow">🟨 {e.player_name} </span>)}
           </div>
           <div style={{ textAlign: 'right' }}>
-            {awayGoals.map((e, i) => <span key={i} className="event-goal">⚽ {e.player_name} {e.minute && `${e.minute}'`} </span>)}
+            {[...awayGoals, ...awayOwnGoals].map((e, i) => (
+              <span key={i} className="event-goal">
+                ⚽ {e.player_name}{e.event_type === 'own_goal' ? ' (og)' : ''}{e.minute ? ` ${e.minute}'` : ''}{' '}
+              </span>
+            ))}
             {awayYellows.map((e, i) => <span key={i} className="event-yellow">🟨 {e.player_name} </span>)}
           </div>
         </div>
