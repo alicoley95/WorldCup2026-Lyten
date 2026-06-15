@@ -25,7 +25,6 @@ export default async function handler(req, context) {
   const supabase = createClient(supabaseUrl, supabaseKey);
   const apiHeaders = { 'X-Auth-Token': apiKey };
 
-  // Map API status values to what the frontend expects (lowercase)
   function normaliseStatus(apiStatus) {
     const map = {
       'FINISHED': 'finished',
@@ -39,22 +38,20 @@ export default async function handler(req, context) {
     return map[apiStatus] || apiStatus.toLowerCase();
   }
 
-  // Map API goal types to what the frontend expects
   function normaliseGoalType(apiType) {
     if (apiType === 'PENALTY') return 'penalty_goal';
     if (apiType === 'OWN') return 'own_goal';
     return 'goal';
   }
 
-  // Map API card types to what the frontend expects
   function normaliseCardType(apiCard) {
     if (apiCard === 'YELLOW_RED') return 'yellow_red';
     if (apiCard === 'RED') return 'red';
-    return 'yellow'; // frontend checks for 'yellow'
+    return 'yellow';
   }
 
   try {
-    // ── 1. Fetch all WC matches ──────────────────────────────────────────────
+    // ── 1. Fetch all 104 WC matches ──────────────────────────────────────────
     const matchesUrl = `${FOOTBALL_DATA_BASE}/competitions/${COMPETITION}/matches`;
     console.log(`Fetching match list: ${matchesUrl}`);
     const matchesRes = await fetch(matchesUrl, { headers: apiHeaders });
@@ -100,15 +97,19 @@ export default async function handler(req, context) {
     console.log(`Matches needing detail fetch: ${matchesToProcess.length}`);
 
     let matchesUpserted = 0;
-    let matchesSkipped = finishedMatches.length - matchesToProcess.length;
+    let matchesSkipped = 0;
     let eventsInserted = 0;
 
-    // ── 4. Upsert all finished matches (scores + normalised status) ───────────
-    for (const match of finishedMatches) {
+    // ── 4. Upsert ALL matches (finished + scheduled + knockout placeholders) ──
+    for (const match of allMatches) {
       const homeScore = match.score?.fullTime?.home ?? null;
       const awayScore = match.score?.fullTime?.away ?? null;
-      const homeName = match.homeTeam?.shortName || match.homeTeam?.name;
-      const awayName = match.awayTeam?.shortName || match.awayTeam?.name;
+
+      // For unresolved knockout fixtures, team names may be null
+      // Use placeholder text so the schedule still shows the fixture slot
+      const homeName = match.homeTeam?.shortName || match.homeTeam?.name || 'TBD';
+      const awayName = match.awayTeam?.shortName || match.awayTeam?.name || 'TBD';
+
       const rawGroup = match.group || null;
       const groupName = rawGroup ? rawGroup.replace('GROUP_', '') : null;
       const rawStage = match.stage || '';
@@ -125,9 +126,31 @@ export default async function handler(req, context) {
         stage: stageLabel,
         group_name: groupName,
         match_date: match.utcDate,
-        status: normaliseStatus(match.status), // 'finished' not 'FINISHED'
+        status: normaliseStatus(match.status),
         updated_at: new Date().toISOString(),
       };
+
+      // Skip upserting team names for already-imported matches where we have
+      // real names from the import workflow (avoid overwriting with API names)
+      const existing = existingByFixtureId[match.id];
+      if (existing && match.status !== 'FINISHED') {
+        // For non-finished matches already in DB, only update date and status
+        const { error: matchError } = await supabase
+          .from('matches')
+          .update({
+            status: normaliseStatus(match.status),
+            match_date: match.utcDate,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('api_fixture_id', match.id);
+
+        if (matchError) {
+          console.error(`Error updating match ${match.id}:`, matchError.message);
+        } else {
+          matchesUpserted++;
+        }
+        continue;
+      }
 
       const { error: matchError } = await supabase
         .from('matches')
@@ -140,7 +163,7 @@ export default async function handler(req, context) {
       }
     }
 
-    // ── 5. Fetch individual match detail for new/changed matches ─────────────
+    // ── 5. Fetch individual match detail for new/changed finished matches ─────
     for (const match of matchesToProcess) {
       await delay(6200);
 
@@ -167,13 +190,10 @@ export default async function handler(req, context) {
       }
 
       const matchId = dbMatch.id;
-
-      // Clear existing events for this match before re-inserting
       await supabase.from('match_events').delete().eq('match_id', matchId);
 
       const events = [];
 
-      // Goals — normalised to 'goal', 'penalty_goal', 'own_goal'
       const goals = detail.goals || [];
       for (const goal of goals) {
         if (!goal.scorer?.name) continue;
@@ -187,7 +207,6 @@ export default async function handler(req, context) {
         });
       }
 
-      // Bookings — normalised to 'yellow', 'yellow_red', 'red'
       const bookings = detail.bookings || [];
       for (const booking of bookings) {
         if (!booking.player?.name) continue;
