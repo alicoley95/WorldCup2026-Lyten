@@ -4,8 +4,8 @@ const CODE_TO_NAME = {
   MEX: 'Mexico', RSA: 'South Africa', KOR: 'Korea Republic', CZE: 'Czechia',
   CAN: 'Canada', BIH: 'Bosnia-H.', QAT: 'Qatar', SUI: 'Switzerland',
   BRA: 'Brazil', MAR: 'Morocco', HAI: 'Haiti', SCO: 'Scotland',
-  USA: 'USA', PAR: 'Paraguay', AUS: 'Australia', TUR: 'Türkiye',
-  GER: 'Germany', CUW: 'Curaçao', CIV: "Côte d'Ivoire", ECU: 'Ecuador',
+  USA: 'USA', PAR: 'Paraguay', AUS: 'Australia', TUR: 'Turkey',
+  GER: 'Germany', CUW: 'Curacao', CIV: "Ivory Coast", ECU: 'Ecuador',
   NED: 'Netherlands', JPN: 'Japan', SWE: 'Sweden', TUN: 'Tunisia',
   BEL: 'Belgium', EGY: 'Egypt', IRN: 'Iran', NZL: 'New Zealand',
   ESP: 'Spain', CPV: 'Cape Verde', KSA: 'Saudi Arabia', URU: 'Uruguay',
@@ -15,43 +15,40 @@ const CODE_TO_NAME = {
   ENG: 'England', CRO: 'Croatia', GHA: 'Ghana', PAN: 'Panama'
 };
 
-// Aliases for teams whose names vary between APIs and databases
-const NAME_ALIASES = {
-  'turkey': 'TUR', 'turkiye': 'TUR', 'türkiye': 'TUR',
-  'south korea': 'KOR', 'korea republic': 'KOR', 'korea': 'KOR',
-  'usa': 'USA', 'united states': 'USA', 'us': 'USA',
-  'bosnia': 'BIH', 'bosnia and herzegovina': 'BIH', 'bosnia-h.': 'BIH', 'bosnia herzegovina': 'BIH',
-  'ivory coast': 'CIV', "côte d'ivoire": 'CIV', "cote d'ivoire": 'CIV', 'cote divoire': 'CIV',
-  'curacao': 'CUW', 'curaçao': 'CUW',
-  'dr congo': 'COD', 'democratic republic of congo': 'COD', 'congo dr': 'COD',
-  'cape verde': 'CPV', 'cabo verde': 'CPV',
-  'saudi arabia': 'KSA',
-  'iran': 'IRN',
-  'new zealand': 'NZL',
-  'czechia': 'CZE', 'czech republic': 'CZE',
-  'australia': 'AUS',
-  'scotland': 'SCO',
-  'morocco': 'MAR',
-  'switzerland': 'SUI',
+// All known variants a team name might appear as in the DB, stripped of diacritics
+const CODE_TO_VARIANTS = {
+  TUR: ['turkey', 'turkiye', 'türkiye'],
+  BIH: ['bosnia', 'bosniah', 'bosniaherzegovina', 'bosnia and herzegovina'],
+  KOR: ['korea', 'south korea', 'korea republic'],
+  USA: ['usa', 'united states'],
+  CIV: ['ivory coast', 'cote divoire', 'cotedivoire'],
+  CUW: ['curacao', 'curao'],
+  COD: ['dr congo', 'congo', 'democratic republic'],
+  CPV: ['cape verde', 'cabo verde'],
+  KSA: ['saudi arabia', 'saudi'],
+  CZE: ['czechia', 'czech republic'],
 };
 
-// Normalise a team name to a code for fuzzy matching
-function normalise(name) {
-  return name
+function normalise(str) {
+  return str
     .toLowerCase()
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '') // strip diacritics
-    .replace(/[^a-z0-9 ]/g, '')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, '')
     .trim();
 }
 
-// Get all possible search terms for a team
-function getSearchTerms(code) {
-  const canonical = CODE_TO_NAME[code] || code;
-  const normCanonical = normalise(canonical);
-  // Also include the first word for partial matching
-  const firstWord = normCanonical.split(' ')[0];
-  return { canonical, normCanonical, firstWord };
+function teamMatches(dbTeamName, code) {
+  const norm = normalise(dbTeamName);
+  const canonical = normalise(CODE_TO_NAME[code] || code);
+  
+  // Direct match
+  if (norm === canonical) return true;
+  if (norm.includes(canonical) || canonical.includes(norm)) return true;
+  
+  // Check known variants
+  const variants = CODE_TO_VARIANTS[code] || [];
+  return variants.some(v => norm.includes(v) || v.includes(norm));
 }
 
 export default async function handler(req, context) {
@@ -84,7 +81,6 @@ export default async function handler(req, context) {
 
   console.log(`Import started: ${matches.length} matches`);
 
-  // Load all matches from Supabase once and do matching in memory
   const { data: allDbMatches, error: loadError } = await supabase
     .from('matches')
     .select('id, home_team, away_team, match_date');
@@ -95,63 +91,33 @@ export default async function handler(req, context) {
     });
   }
 
-  // Build normalised index of DB matches
-  const dbIndex = allDbMatches.map(m => ({
-    ...m,
-    normHome: normalise(m.home_team),
-    normAway: normalise(m.away_team),
-    date: m.match_date ? m.match_date.substring(0, 10) : null
-  }));
-
   const results = [];
 
   for (const match of matches) {
-    const homeTerms = getSearchTerms(match.homeCode);
-    const awayTerms = getSearchTerms(match.awayCode);
+    console.log(`Looking for: ${match.homeCode} vs ${match.awayCode} on ${match.date}`);
 
-    console.log(`Looking for: ${match.homeCode} (${homeTerms.normCanonical}) vs ${match.awayCode} (${awayTerms.normCanonical}) on ${match.date}`);
+    // Find DB match — try with date first, then without
+    let dbMatch = null;
 
-    // Find matching DB row — try date + teams first, then just teams
-    let dbMatch = dbIndex.find(m => {
-      const homeMatch = m.normHome.includes(homeTerms.firstWord) || m.normAway.includes(homeTerms.firstWord);
-      const awayMatch = m.normHome.includes(awayTerms.firstWord) || m.normAway.includes(awayTerms.firstWord);
-      const dateMatch = m.date === match.date;
-      return homeMatch && awayMatch && dateMatch;
-    });
-
-    // Fallback: match by teams only (handles UTC date offsets)
-    if (!dbMatch) {
-      dbMatch = dbIndex.find(m => {
-        const homeMatch = m.normHome.includes(homeTerms.firstWord) || m.normAway.includes(homeTerms.firstWord);
-        const awayMatch = m.normHome.includes(awayTerms.firstWord) || m.normAway.includes(awayTerms.firstWord);
-        return homeMatch && awayMatch;
+    for (const tryDateMatch of [true, false]) {
+      dbMatch = allDbMatches.find(m => {
+        const homeOk = teamMatches(m.home_team, match.homeCode) || teamMatches(m.away_team, match.homeCode);
+        const awayOk = teamMatches(m.home_team, match.awayCode) || teamMatches(m.away_team, match.awayCode);
+        const dateOk = !tryDateMatch || (m.match_date && m.match_date.startsWith(match.date));
+        return homeOk && awayOk && dateOk;
       });
-    }
-
-    // Fallback: check aliases for team names stored differently in DB
-    if (!dbMatch) {
-      const homeAlias = NAME_ALIASES[homeTerms.normCanonical];
-      const awayAlias = NAME_ALIASES[awayTerms.normCanonical];
-      const homeAlt = homeAlias ? normalise(CODE_TO_NAME[homeAlias] || homeAlias) : homeTerms.normCanonical;
-      const awayAlt = awayAlias ? normalise(CODE_TO_NAME[awayAlias] || awayAlias) : awayTerms.normCanonical;
-
-      dbMatch = dbIndex.find(m => {
-        const homeMatch = m.normHome.includes(homeAlt.split(' ')[0]) || m.normAway.includes(homeAlt.split(' ')[0]);
-        const awayMatch = m.normHome.includes(awayAlt.split(' ')[0]) || m.normAway.includes(awayAlt.split(' ')[0]);
-        return homeMatch && awayMatch;
-      });
+      if (dbMatch) break;
     }
 
     if (!dbMatch) {
-      console.error(`Match not found: ${match.homeCode} vs ${match.awayCode} on ${match.date}`);
-      console.log('DB teams sample:', dbIndex.slice(0, 5).map(m => `${m.normHome} vs ${m.normAway}`));
+      console.error(`Match not found: ${match.homeCode} vs ${match.awayCode}`);
+      console.log('All DB teams:', allDbMatches.map(m => `${m.home_team} vs ${m.away_team} (${m.match_date?.substring(0,10)})`).join(' | '));
       results.push({ match: `${match.homeCode} vs ${match.awayCode}`, status: 'not_found' });
       continue;
     }
 
-    console.log(`Found: ${dbMatch.home_team} vs ${dbMatch.away_team} (id: ${dbMatch.id})`);
+    console.log(`Found: ${dbMatch.home_team} vs ${dbMatch.away_team}`);
 
-    // Update score and status
     const { error: updateError } = await supabase
       .from('matches')
       .update({
@@ -166,7 +132,6 @@ export default async function handler(req, context) {
       console.error(`Failed to update match ${dbMatch.id}:`, updateError.message);
     }
 
-    // Clear existing events
     await supabase.from('match_events').delete().eq('match_id', dbMatch.id);
 
     const events = [];
