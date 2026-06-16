@@ -9,6 +9,7 @@ export default function Schedule() {
   const [events, setEvents] = useState([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('all')
+  const [sortMode, setSortMode] = useState('group') // 'group' | 'date'
 
   useEffect(() => {
     async function load() {
@@ -55,12 +56,26 @@ export default function Schedule() {
     return aIdx - bIdx
   })
 
+  // Flat chronological view, ignores group/stage boundaries entirely.
+  const byDate = [...filtered].sort((a, b) => new Date(a.match_date) - new Date(b.match_date))
+
   const finishedCount = matches.filter(m => m.status === 'finished').length
 
   return (
     <>
       <div className="page-title">📅 Schedule & Results</div>
       <div className="alert alert-info">{finishedCount} of {matches.length} matches completed</div>
+
+      <div className="filter-row">
+        <button className={`filter-btn ${sortMode === 'group' ? 'active' : ''}`}
+          onClick={() => setSortMode('group')}>
+          📁 By Group
+        </button>
+        <button className={`filter-btn ${sortMode === 'date' ? 'active' : ''}`}
+          onClick={() => setSortMode('date')}>
+          🗓️ By Date
+        </button>
+      </div>
 
       <div className="filter-row">
         {filterOptions.map(f => (
@@ -71,16 +86,24 @@ export default function Schedule() {
         ))}
       </div>
 
-      {sortedKeys.map(stage => (
-        <div key={stage}>
-          <div className="stage-header">{stage}</div>
-          <div className="card">
-            {grouped[stage].map(m => (
-              <MatchRow key={m.id} match={m} events={events.filter(e => e.match_id === m.id)} />
-            ))}
+      {sortMode === 'group' ? (
+        sortedKeys.map(stage => (
+          <div key={stage}>
+            <div className="stage-header">{stage}</div>
+            <div className="card">
+              {grouped[stage].map(m => (
+                <MatchRow key={m.id} match={m} events={events.filter(e => e.match_id === m.id)} />
+              ))}
+            </div>
           </div>
+        ))
+      ) : (
+        <div className="card">
+          {byDate.map(m => (
+            <MatchRow key={m.id} match={m} events={events.filter(e => e.match_id === m.id)} />
+          ))}
         </div>
-      ))}
+      )}
     </>
   )
 }
