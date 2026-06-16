@@ -165,17 +165,29 @@ export async function runSync({ supabase, apiKey, maxDetailFetchesPerRun = Infin
       updated_at: new Date().toISOString(),
     };
 
-    // For non-finished matches already in DB, only update date and status,
-    // to avoid overwriting team names already set by the import workflow.
+    // For non-finished matches already in DB, only update date, status, and
+    // (while actually underway) the running score, to avoid overwriting team
+    // names already set by the import workflow.
     const existing = existingByFixtureId[match.id];
     if (existing && match.status !== 'FINISHED') {
+      const updatePayload = {
+        status: normaliseStatus(match.status),
+        match_date: match.utcDate,
+        updated_at: new Date().toISOString(),
+      };
+
+      // football-data.org's fullTime field is set to 0-0 the moment a match
+      // goes IN_PLAY and updates as the match progresses, it isn't withheld
+      // until the final whistle. Capture it while the match is live so the
+      // schedule shows the current score during play, not just afterwards.
+      if (match.status === 'IN_PLAY' || match.status === 'PAUSED') {
+        updatePayload.home_score = match.score?.fullTime?.home ?? null;
+        updatePayload.away_score = match.score?.fullTime?.away ?? null;
+      }
+
       const { error: matchError } = await supabase
         .from('matches')
-        .update({
-          status: normaliseStatus(match.status),
-          match_date: match.utcDate,
-          updated_at: new Date().toISOString(),
-        })
+        .update(updatePayload)
         .eq('api_fixture_id', match.id);
 
       if (matchError) {
