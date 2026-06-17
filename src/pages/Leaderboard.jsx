@@ -39,7 +39,7 @@ export default function Leaderboard() {
 
   const scored = participants.map(p => {
     const team = getTeam(p.nation)
-    const stats = getTeamStats(p.nation, matches, events)
+    const stats = getTeamStats(p.nation, matches, events, p.top_scorer_name)
     const pos = positions[p.nation] !== undefined ? positions[p.nation] : null
     const scores = scoreParticipant(p, stats, pos)
     return { ...p, team, stats, scores }
@@ -96,8 +96,13 @@ export default function Leaderboard() {
                 </td>
                 <td>
                   <ScoreCell score={p.scores.topScorer} guess={p.top_scorer_goals_guess}
-                    actual={p.stats.topScorer.goals} />
-                  <div className="guess-vs">{p.top_scorer_name}</div>
+                    actual={p.stats.predictedScorerGoals} />
+                  <div className="guess-vs">
+                    {p.top_scorer_name}
+                    {p.stats.topScorer.name !== '-' && p.stats.topScorer.name !== p.top_scorer_name && (
+                      <> · actual leader: {p.stats.topScorer.name} ({p.stats.topScorer.goals})</>
+                    )}
+                  </div>
                 </td>
                 <td>
                   <ScoreCell score={p.scores.yellowCards} guess={p.yellow_cards_guess}
