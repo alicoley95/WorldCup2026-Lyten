@@ -49,10 +49,12 @@ export default function Admin() {
 function ParticipantsTab() {
   const [participants, setParticipants] = useState([])
   const [msg, setMsg] = useState(null)
-  const [form, setForm] = useState({
+  const [editId, setEditId] = useState(null)
+  const blankForm = {
     name: '', nation: '', position_guess: '', goals_for_guess: '', goals_against_guess: '',
     top_scorer_name: '', top_scorer_goals_guess: '', yellow_cards_guess: '', tiebreaker_guess: ''
-  })
+  }
+  const [form, setForm] = useState(blankForm)
 
   useEffect(() => { loadP() }, [])
   async function loadP() {
@@ -60,9 +62,8 @@ function ParticipantsTab() {
     setParticipants(data || [])
   }
 
-  async function addParticipant() {
-    if (!form.name || !form.nation) { setMsg({ type: 'error', text: 'Name and nation required' }); return }
-    const row = {
+  function buildRow() {
+    return {
       name: form.name, nation: form.nation,
       position_guess: parseInt(form.position_guess) || 1,
       goals_for_guess: parseInt(form.goals_for_guess) || 0,
@@ -72,16 +73,47 @@ function ParticipantsTab() {
       yellow_cards_guess: parseInt(form.yellow_cards_guess) || 0,
       tiebreaker_guess: parseInt(form.tiebreaker_guess) || 0
     }
-    const { error } = await supabase.from('participants').insert(row)
+  }
+
+  async function addParticipant() {
+    if (!form.name || !form.nation) { setMsg({ type: 'error', text: 'Name and nation required' }); return }
+    const { error } = await supabase.from('participants').insert(buildRow())
     if (error) { setMsg({ type: 'error', text: error.message }); return }
     setMsg({ type: 'success', text: `${form.name} added` })
-    setForm({ name: '', nation: '', position_guess: '', goals_for_guess: '', goals_against_guess: '',
-      top_scorer_name: '', top_scorer_goals_guess: '', yellow_cards_guess: '', tiebreaker_guess: '' })
+    setForm(blankForm)
+    loadP()
+  }
+
+  function startEdit(p) {
+    setEditId(p.id)
+    setForm({
+      name: p.name || '', nation: p.nation || '',
+      position_guess: p.position_guess ?? '', goals_for_guess: p.goals_for_guess ?? '',
+      goals_against_guess: p.goals_against_guess ?? '', top_scorer_name: p.top_scorer_name ?? '',
+      top_scorer_goals_guess: p.top_scorer_goals_guess ?? '', yellow_cards_guess: p.yellow_cards_guess ?? '',
+      tiebreaker_guess: p.tiebreaker_guess ?? ''
+    })
+    setMsg(null)
+  }
+
+  function cancelEdit() {
+    setEditId(null)
+    setForm(blankForm)
+  }
+
+  async function saveEdit() {
+    if (!form.name || !form.nation) { setMsg({ type: 'error', text: 'Name and nation required' }); return }
+    const { error } = await supabase.from('participants').update(buildRow()).eq('id', editId)
+    if (error) { setMsg({ type: 'error', text: error.message }); return }
+    setMsg({ type: 'success', text: `${form.name} updated` })
+    setEditId(null)
+    setForm(blankForm)
     loadP()
   }
 
   async function deleteP(id, name) {
     if (!confirm(`Delete ${name}?`)) return
+    if (editId === id) cancelEdit()
     await supabase.from('participants').delete().eq('id', id)
     loadP()
   }
@@ -90,7 +122,7 @@ function ParticipantsTab() {
     <>
       {msg && <div className={`alert alert-${msg.type}`}>{msg.text}</div>}
       <div className="card">
-        <h3>Add Participant</h3>
+        <h3>{editId ? `Edit Participant: ${form.name}` : 'Add Participant'}</h3>
         <div className="form-grid three">
           <div className="form-group">
             <label>Name</label>
@@ -139,7 +171,14 @@ function ParticipantsTab() {
           </div>
         </div>
         <div className="btn-row">
-          <button className="btn-primary" onClick={addParticipant}>Add Participant</button>
+          {editId ? (
+            <>
+              <button className="btn-primary" onClick={saveEdit}>Save Changes</button>
+              <button className="btn-sm" onClick={cancelEdit}>Cancel</button>
+            </>
+          ) : (
+            <button className="btn-primary" onClick={addParticipant}>Add Participant</button>
+          )}
         </div>
       </div>
 
@@ -152,7 +191,7 @@ function ParticipantsTab() {
             </thead>
             <tbody>
               {participants.map(p => (
-                <tr key={p.id}>
+                <tr key={p.id} style={editId === p.id ? { background: 'var(--bg)' } : undefined}>
                   <td>{p.name}</td>
                   <td>{p.nation}</td>
                   <td>{p.position_guess}</td>
@@ -161,7 +200,10 @@ function ParticipantsTab() {
                   <td>{p.top_scorer_name} ({p.top_scorer_goals_guess})</td>
                   <td>{p.yellow_cards_guess}</td>
                   <td>{p.tiebreaker_guess}</td>
-                  <td><button className="btn-danger btn-sm" onClick={() => deleteP(p.id, p.name)}>✕</button></td>
+                  <td>
+                    <button className="btn-sm btn-primary" onClick={() => startEdit(p)}>Edit</button>{' '}
+                    <button className="btn-danger btn-sm" onClick={() => deleteP(p.id, p.name)}>✕</button>
+                  </td>
                 </tr>
               ))}
             </tbody>
