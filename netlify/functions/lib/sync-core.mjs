@@ -102,9 +102,11 @@ export async function runSync({ supabase, apiKey, maxDetailFetchesPerRun = Infin
   console.log(`Total matches: ${allMatches.length}, finished: ${finishedMatches.length}`);
 
   // ── 2. Fetch already-synced matches from Supabase ────────────────────────
+  // home_team and away_team are fetched so we can detect when knockout team
+  // names become known and update them (see guard block in step 4 below).
   const { data: existingMatches, error: existingError } = await supabase
     .from('matches')
-    .select('id, api_fixture_id, home_score, away_score');
+    .select('id, api_fixture_id, home_score, away_score, home_team, away_team');
 
   if (existingError) {
     console.error('Error fetching existing matches:', existingError.message);
@@ -165,9 +167,12 @@ export async function runSync({ supabase, apiKey, maxDetailFetchesPerRun = Infin
       updated_at: new Date().toISOString(),
     };
 
-    // For non-finished matches already in DB, only update date, status, and
-    // (while actually underway) the running score, to avoid overwriting team
-    // names already set by the import workflow.
+    // For non-finished matches already in DB, only update what's safe to
+    // touch — date, status, live score — to avoid overwriting team names or
+    // events already set by the manual import workflow.
+    // Exception: if the API has now resolved a knockout team name that was
+    // previously 'TBD' (i.e. teams have qualified), update it so the
+    // schedule shows the confirmed participants rather than placeholders.
     const existing = existingByFixtureId[match.id];
     if (existing && match.status !== 'FINISHED') {
       const updatePayload = {
@@ -183,6 +188,21 @@ export async function runSync({ supabase, apiKey, maxDetailFetchesPerRun = Infin
       if (match.status === 'IN_PLAY' || match.status === 'PAUSED') {
         updatePayload.home_score = match.score?.fullTime?.home ?? null;
         updatePayload.away_score = match.score?.fullTime?.away ?? null;
+      }
+
+      // Once group stage ends, the API populates knockout fixtures with real
+      // team names. If the stored name is still 'TBD' (or null) and the API
+      // now has a real name, update it. This is the only circumstance under
+      // which we overwrite an existing team name during a scheduled sync.
+      const newHome = match.homeTeam?.shortName || match.homeTeam?.name || null;
+      const newAway = match.awayTeam?.shortName || match.awayTeam?.name || null;
+      if (newHome && newHome !== 'TBD' && (!existing.home_team || existing.home_team === 'TBD')) {
+        updatePayload.home_team = newHome;
+        console.log(`Knockout team resolved: match ${match.id} home → ${newHome}`);
+      }
+      if (newAway && newAway !== 'TBD' && (!existing.away_team || existing.away_team === 'TBD')) {
+        updatePayload.away_team = newAway;
+        console.log(`Knockout team resolved: match ${match.id} away → ${newAway}`);
       }
 
       const { error: matchError } = await supabase
