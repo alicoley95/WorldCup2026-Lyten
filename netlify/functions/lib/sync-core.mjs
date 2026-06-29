@@ -196,13 +196,13 @@ export async function runSync({ supabase, apiKey, maxDetailFetchesPerRun = Infin
       // which we overwrite an existing team name during a scheduled sync.
       const newHome = match.homeTeam?.shortName || match.homeTeam?.name || null;
       const newAway = match.awayTeam?.shortName || match.awayTeam?.name || null;
-      if (newHome && newHome !== 'TBD' && (!existing.home_team || existing.home_team === 'TBD')) {
-        updatePayload.home_team = newHome;
-        console.log(`Knockout team resolved: match ${match.id} home → ${newHome}`);
+      if (newHome && newHome !== 'TBD' && newHome !== existing.home_team) {
+      updatePayload.home_team = newHome;
+      console.log(`Knockout team resolved: match ${match.id} home → ${newHome}`); 
       }
-      if (newAway && newAway !== 'TBD' && (!existing.away_team || existing.away_team === 'TBD')) {
-        updatePayload.away_team = newAway;
-        console.log(`Knockout team resolved: match ${match.id} away → ${newAway}`);
+      if (newAway && newAway !== 'TBD' && newAway !== existing.away_team) {
+      updatePayload.away_team = newAway;
+      console.log(`Knockout team resolved: match ${match.id} away → ${newAway}`);
       }
 
       const { error: matchError } = await supabase
