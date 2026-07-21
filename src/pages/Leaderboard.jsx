@@ -8,15 +8,17 @@ export default function Leaderboard() {
   const [matches, setMatches] = useState([])
   const [events, setEvents] = useState([])
   const [positions, setPositions] = useState({})
+  const [teamStatsMap, setTeamStatsMap] = useState({})
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     async function load() {
-      const [pRes, mRes, eRes, posRes] = await Promise.all([
+      const [pRes, mRes, eRes, posRes, statsRes] = await Promise.all([
         supabase.from('participants').select('*'),
         supabase.from('matches').select('*'),
         supabase.from('match_events').select('*'),
-        supabase.from('team_positions').select('*')
+        supabase.from('team_positions').select('*'),
+        supabase.from('team_stats').select('*')
       ])
       setParticipants(pRes.data || [])
       setMatches(mRes.data || [])
@@ -24,6 +26,9 @@ export default function Leaderboard() {
       const posMap = {}
       ;(posRes.data || []).forEach(p => { posMap[p.team] = p.final_position })
       setPositions(posMap)
+      const statsMap = {}
+      ;(statsRes.data || []).forEach(s => { statsMap[s.team] = s })
+      setTeamStatsMap(statsMap)
       setLoading(false)
     }
     load()
@@ -39,7 +44,8 @@ export default function Leaderboard() {
 
   const scored = participants.map(p => {
     const team = getTeam(p.nation)
-    const stats = getTeamStats(p.nation, matches, events, p.top_scorer_name)
+    const overrides = teamStatsMap[p.nation]
+    const stats = getTeamStats(p.nation, matches, events, p.top_scorer_name, team.code, overrides)
     const pos = positions[p.nation] !== undefined ? positions[p.nation] : null
     const scores = scoreParticipant(p, stats, pos)
     return { ...p, team, stats, scores }
