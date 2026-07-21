@@ -6,9 +6,8 @@ export function proximityScore(guess, actual) {
 }
 
 export function getTeamStats(teamName, matches, events, predictedScorerName, teamCode, overrides) {
-  // Scorer goals still come from match_events for per-player accuracy
-  const eventTeam = teamCode || teamName
-  const teamEvents = events.filter(e => e.team === eventTeam)
+  // Scorer goals use teamName directly — match_events stores full names not codes
+  const teamEvents = events.filter(e => e.team === teamName)
   const goalEvents = teamEvents.filter(e =>
     e.event_type === 'goal' || e.event_type === 'penalty_goal'
   )
