@@ -1,24 +1,14 @@
 const MAX_POINTS = 20
+
 export function proximityScore(guess, actual) {
   if (actual === null || actual === undefined) return null
   return Math.max(0, MAX_POINTS - Math.abs(guess - actual))
 }
-export function getTeamStats(teamName, matches, events, predictedScorerName) {
-  const finished = matches.filter(
-    m => m.status === 'finished' && (m.home_team === teamName || m.away_team === teamName)
-  )
-  let goalsFor = 0, goalsAgainst = 0
-  finished.forEach(m => {
-    if (m.home_team === teamName) {
-      goalsFor += m.home_score || 0
-      goalsAgainst += m.away_score || 0
-    } else {
-      goalsFor += m.away_score || 0
-      goalsAgainst += m.home_score || 0
-    }
-  })
-  const teamEvents = events.filter(e => e.team === teamName)
-  const yellowCards = teamEvents.filter(e => e.event_type === 'yellow').length
+
+export function getTeamStats(teamName, matches, events, predictedScorerName, teamCode, overrides) {
+  // Scorer goals still come from match_events for per-player accuracy
+  const eventTeam = teamCode || teamName
+  const teamEvents = events.filter(e => e.team === eventTeam)
   const goalEvents = teamEvents.filter(e =>
     e.event_type === 'goal' || e.event_type === 'penalty_goal'
   )
@@ -26,22 +16,37 @@ export function getTeamStats(teamName, matches, events, predictedScorerName) {
   goalEvents.forEach(e => {
     scorerMap[e.player_name] = (scorerMap[e.player_name] || 0) + 1
   })
-
-  // The team's actual leading scorer, kept for reference/display only, not
-  // used for scoring.
   let topScorer = { name: '-', goals: 0 }
   Object.entries(scorerMap).forEach(([name, goals]) => {
     if (goals > topScorer.goals) topScorer = { name, goals }
   })
-
-  // Goals scored specifically by the player this participant predicted,
-  // matched by name with accents and case ignored. This is what top scorer
-  // predictions should actually be scored against, previously this was the
-  // team's overall leading scorer regardless of who was predicted.
   const normalise = s => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase()
   const predictedScorerGoals = predictedScorerName
     ? Object.entries(scorerMap).find(([name]) => normalise(name) === normalise(predictedScorerName))?.[1] || 0
     : 0
+
+  // GF, GA and yellow cards use verified overrides from team_stats table if available,
+  // otherwise fall back to live calculation from match data
+  let goalsFor = 0, goalsAgainst = 0, yellowCards = 0
+  if (overrides) {
+    goalsFor = overrides.goals_for
+    goalsAgainst = overrides.goals_against
+    yellowCards = overrides.yellow_cards
+  } else {
+    const finished = matches.filter(
+      m => m.status === 'finished' && (m.home_team === teamName || m.away_team === teamName)
+    )
+    finished.forEach(m => {
+      if (m.home_team === teamName) {
+        goalsFor += m.home_score || 0
+        goalsAgainst += m.away_score || 0
+      } else {
+        goalsFor += m.away_score || 0
+        goalsAgainst += m.home_score || 0
+      }
+    })
+    yellowCards = teamEvents.filter(e => e.event_type === 'yellow').length
+  }
 
   return {
     goalsFor,
@@ -49,10 +54,10 @@ export function getTeamStats(teamName, matches, events, predictedScorerName) {
     yellowCards,
     topScorer,
     predictedScorerGoals,
-    gamesPlayed: finished.length,
     combinedGoals: goalsFor + goalsAgainst
   }
 }
+
 export function scoreParticipant(participant, teamStats, teamPosition) {
   const pos = teamPosition !== null ? proximityScore(participant.position_guess, teamPosition) : null
   const gf = proximityScore(participant.goals_for_guess, teamStats.goalsFor)
